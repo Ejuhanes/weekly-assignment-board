@@ -1,338 +1,288 @@
-import React, { useMemo, useState, useEffect } from "react";
-import { motion } from "framer-motion";
-import { CalendarDays, ChevronLeft, ChevronRight, Plus, Download, Monitor, MonitorCog } from "lucide-react";
+// App.jsx — Weekly 4‑Hour Assignment Board (clean design, no auth)
+// Purpose: A big‑screen friendly weekly board where each person books EXACTLY one 4‑hour slot per week.
+// Storage: localStorage by default (shared backend optional via CONFIG.backendUrl)
+// Notes: Designed to be embedded in SharePoint or opened directly (Vercel).
 
-// --- Minimal shadcn/ui primitives (inline) ---
-const Button = ({ className = "", children, ...props }) => (
-  <button
-    className={`inline-flex items-center gap-2 rounded-2xl px-4 py-2 text-sm font-medium shadow-sm border border-gray-200 hover:shadow transition ${className}`}
-    {...props}
-  >
-    {children}
-  </button>
-);
-const Card = ({ className = "", children }) => (
-  <div className={`rounded-2xl border border-gray-200 bg-white shadow-sm ${className}`}>{children}</div>
-);
-const CardContent = ({ className = "", children }) => (
-  <div className={`p-4 ${className}`}>{children}</div>
-);
+import React, { useEffect, useMemo, useState } from "react";
 
-// --- Helpers ---
-const startOfWeek = (date) => {
-  // Monday as first day of week (ISO)
-  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
-  const day = d.getUTCDay();
-  const diff = (day === 0 ? -6 : 1) - day; // if Sunday (0), go back 6
-  d.setUTCDate(d.getUTCDate() + diff);
-  d.setUTCHours(0, 0, 0, 0);
-  return d;
-};
-const addDays = (date, days) => {
-  const d = new Date(date);
-  d.setUTCDate(d.getUTCDate() + days);
-  return d;
-};
-const formatDate = (date) => date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-const weekKey = (d) => {
-  const y = d.getUTCFullYear();
-  // ISO week number
-  const tmp = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
-  // Thursday in current week decides the year
-  tmp.setUTCDate(tmp.getUTCDate() + 3 - ((tmp.getUTCDay() + 6) % 7));
-  const week1 = new Date(Date.UTC(tmp.getUTCFullYear(), 0, 4));
-  const weekNo = 1 + Math.round(((tmp - week1) / 86400000 - 3 + ((week1.getUTCDay() + 6) % 7)) / 7);
-  return `${y}-W${String(weekNo).padStart(2, "0")}`;
+// ==========================
+// CONFIG
+// ==========================
+const CONFIG = {
+  backendUrl: null,     // set to '/api' after adding Vercel serverless functions to share across devices
+  refreshMs: 60000,     // auto refresh interval
+  onePerWeek: true,     // enforce exactly one 4h booking per person per week
+  hoursStart: 7,        // start of visible day
+  hoursEnd: 20,         // end (exclusive)
 };
 
-// Default hours people can start a 4h block
-const HOURS = Array.from({ length: 13 }, (_, i) => 6 + i); // 06:00–18:00 start => up to 22:00 end
-const HOUR_LABEL = (h) => `${String(h).padStart(2, "0")}:00`;
+// ==========================
+// Date Helpers
+// ==========================
+function startOfISOWeek(d) {
+  const x = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const day = x.getUTCDay() || 7; // Monday=1..Sunday=7
+  if (day !== 1) x.setUTCDate(x.getUTCDate() - (day - 1));
+  x.setUTCHours(0, 0, 0, 0);
+  return x;
+}
+function addDays(date, days) { const d = new Date(date); d.setUTCDate(d.getUTCDate() + days); return d; }
+function weekKeyFromDate(d) {
+  const target = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()))
+  target.setUTCDate(target.getUTCDate() + 3 - ((target.getUTCDay() + 6) % 7));
+  const week1 = new Date(Date.UTC(target.getUTCFullYear(), 0, 4));
+  const weekNo = 1 + Math.round(((target - week1) / 86400000 - 3 + ((week1.getUTCDay() + 6) % 7)) / 7);
+  return `${target.getUTCFullYear()}-W${String(weekNo).padStart(2, "0")}`;
+}
+const HOURS = Array.from({ length: (CONFIG.hoursEnd - CONFIG.hoursStart) + 1 }, (_, i) => CONFIG.hoursStart + i);
+const fmt = (h) => `${String(h).padStart(2, "0")}:00`;
+const label = (d) => d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
 
-// Color palette for person chips
-const COLORS = [
-  "bg-blue-100 text-blue-900 border-blue-200",
-  "bg-green-100 text-green-900 border-green-200",
-  "bg-amber-100 text-amber-900 border-amber-200",
-  "bg-fuchsia-100 text-fuchsia-900 border-fuchsia-200",
-  "bg-cyan-100 text-cyan-900 border-cyan-200",
-  "bg-rose-100 text-rose-900 border-rose-200",
-  "bg-violet-100 text-violet-900 border-violet-200",
-  "bg-emerald-100 text-emerald-900 border-emerald-200",
-];
+// ==========================
+// Color helpers (stable per name)
+// ==========================
+function hashColor(name) {
+  let h = 0; for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  const hues = [210, 15, 140, 270, 340, 95, 30, 185];
+  const hue = hues[h % hues.length];
+  return `hsl(${hue} 85% 90%)`; // pastel bg
+}
+function borderColor(name) {
+  let h = 0; for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  const hues = [210, 15, 140, 270, 340, 95, 30, 185];
+  const hue = hues[h % hues.length];
+  return `hsl(${hue} 70% 65%)`;
+}
 
-// --- LocalStorage helpers ---
-const LS_KEY = "four_hour_board_v1";
-const loadState = () => {
-  try {
-    const raw = localStorage.getItem(LS_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
-};
-const saveState = (state) => {
-  try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch {}
-};
+// ==========================
+// Storage layer (localStorage by default, optional REST)
+// ==========================
+const LS_KEY = "weekly_four_hour_board_v1";
+function loadAllLS() { try { return JSON.parse(localStorage.getItem(LS_KEY) || "{}"); } catch { return {}; } }
+function saveAllLS(obj) { try { localStorage.setItem(LS_KEY, JSON.stringify(obj)); } catch {} }
+async function apiGetWeekLS(weekKey) { const all = loadAllLS(); return Object.values(all).filter(b => b.weekKey === weekKey); }
+async function apiCreateLS(body) {
+  const all = loadAllLS();
+  const id = `b_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  all[id] = { id, ...body };
+  saveAllLS(all);
+  return all[id];
+}
+async function apiDeleteLS(id) { const all = loadAllLS(); delete all[id]; saveAllLS(all); }
 
-export default function FourHourAssignmentBoard() {
-  const [baseDate, setBaseDate] = useState(() => startOfWeek(new Date()));
-  const [people, setPeople] = useState(() => loadState()?.people ?? [
-    { id: "p1", name: "Alex", color: 0 },
-    { id: "p2", name: "Sam", color: 1 },
-    { id: "p3", name: "Taylor", color: 2 },
-  ]);
-  const [assignments, setAssignments] = useState(() => loadState()?.assignments ?? {});
-  const [newPerson, setNewPerson] = useState("");
-  const [selectedPersonId, setSelectedPersonId] = useState(people[0]?.id ?? "");
-  const [selectedDay, setSelectedDay] = useState(0);
-  const [selectedStart, setSelectedStart] = useState(8);
-  const [bigScreen, setBigScreen] = useState(false);
+async function apiGetWeekHTTP(weekKey) {
+  const r = await fetch(`${CONFIG.backendUrl}/bookings?weekKey=${encodeURIComponent(weekKey)}`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+async function apiCreateHTTP(body) {
+  const r = await fetch(`${CONFIG.backendUrl}/bookings`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+async function apiDeleteHTTP(id) {
+  const r = await fetch(`${CONFIG.backendUrl}/bookings/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!r.ok) throw new Error(await r.text());
+}
 
-  const wkKey = useMemo(() => weekKey(baseDate), [baseDate]);
+const API = CONFIG.backendUrl
+  ? { getWeek: apiGetWeekHTTP, create: apiCreateHTTP, del: apiDeleteHTTP }
+  : { getWeek: apiGetWeekLS, create: apiCreateLS, del: apiDeleteLS };
+
+// ==========================
+// Tests (light sanity)
+// ==========================
+function runTests() {
+  const out = []; const t = (n, c) => out.push({ n, ok: !!c });
+  const d = new Date(Date.UTC(2025,0,1));
+  t('weekKey shape', /^\d{4}-W\d{2}$/.test(weekKeyFromDate(d)));
+  const b = new Date(Date.UTC(2025,10,10)); t('addDays', addDays(b,2).getUTCDate()===12);
+  return out;
+}
+
+// ==========================
+// UI
+// ==========================
+export default function App(){
+  return (
+    <>
+      <Styles />
+      <Board />
+    </>
+  );
+}
+
+function Board(){
+  const [baseDate, setBaseDate] = useState(() => startOfISOWeek(new Date()));
+  const weekKey = useMemo(() => weekKeyFromDate(baseDate), [baseDate]);
   const days = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(baseDate, i)), [baseDate]);
 
-  useEffect(() => {
-    saveState({ people, assignments });
-  }, [people, assignments]);
+  const [bookings, setBookings] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [tv, setTv] = useState(false);
 
-  const thisWeek = assignments[wkKey] || {};
+  // form
+  const [name, setName] = useState('');
+  const [dayIndex, setDayIndex] = useState(0);
+  const [startHour, setStartHour] = useState(8);
 
-  const handleAddPerson = () => {
-    const name = newPerson.trim();
-    if (!name) return;
-    const id = `p${crypto.getRandomValues(new Uint32Array(1))[0].toString(36)}`;
-    const color = people.length % COLORS.length;
-    const next = [...people, { id, name, color }];
-    setPeople(next);
-    setNewPerson("");
-    if (!selectedPersonId) setSelectedPersonId(id);
-  };
+  async function load(){
+    setLoading(true); setError('');
+    try{ const data = await API.getWeek(weekKey); setBookings(data);} catch(e){ setError(String(e.message||e)); } finally{ setLoading(false);} }
 
-  const toggleBigScreen = () => setBigScreen((v) => !v);
+  useEffect(()=>{ load(); }, [weekKey]);
+  useEffect(()=>{ const id=setInterval(load, CONFIG.refreshMs); return ()=>clearInterval(id); }, []);
 
-  const assignFourHours = () => {
-    if (!selectedPersonId) return;
-    const endHour = selectedStart + 4;
-    if (endHour > 24) return; // basic guard
-
-    // Enforce max of 4h per person per week
-    const week = { ...thisWeek };
-    week[selectedPersonId] = { dayIndex: selectedDay, startHour: selectedStart };
-
-    setAssignments({ ...assignments, [wkKey]: week });
-  };
-
-  const clearAssignment = (pid) => {
-    const week = { ...thisWeek };
-    delete week[pid];
-    setAssignments({ ...assignments, [wkKey]: week });
-  };
-
-  const exportCSV = () => {
-    const rows = [["Week", "Person", "Day", "Start", "End"]];
-    const w = assignments[wkKey] || {};
-    for (const pid of Object.keys(w)) {
-      const person = people.find((p) => p.id === pid);
-      if (!person) continue;
-      const { dayIndex, startHour } = w[pid];
-      const d = days[dayIndex];
-      const end = startHour + 4;
-      rows.push([wkKey, person.name, d.toLocaleDateString(undefined, { weekday: "long" }), HOUR_LABEL(startHour), HOUR_LABEL(end)]);
+  async function submit(){
+    const nm = name.trim(); if(!nm){ setError('Please enter your name'); return; }
+    if(CONFIG.onePerWeek){
+      const has = bookings.some(b=> b.title===nm);
+      if(has){ setError('You already have a 4‑hour assignment this week.'); return; }
     }
-    const csv = rows.map((r) => r.map((x) => `"${String(x).replaceAll('"', '""')}"`).join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${wkKey}_4h_assignments.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
+    const d = days[dayIndex];
+    const iso = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())).toISOString();
+    try{
+      await API.create({ id: undefined, title: nm, dayISO: iso, startHour, durationHours: 4, weekKey });
+      setName(''); await load();
+    }catch(e){ setError(String(e.message||e)); }
+  }
 
-  const goPrev = () => setBaseDate((d) => addDays(d, -7));
-  const goNext = () => setBaseDate((d) => addDays(d, +7));
-  const goToday = () => setBaseDate(startOfWeek(new Date()));
+  async function remove(id){ try{ await API.del(id); await load(); } catch(e){ setError(String(e.message||e)); } }
 
-  const personColor = (pid) => {
-    const p = people.find((x) => x.id === pid);
-    return p ? COLORS[p.color % COLORS.length] : COLORS[0];
-  };
-
-  const initials = (name) => name.split(/\s+/).map((n) => n[0]?.toUpperCase()).slice(0, 2).join("");
+  // calendar placement
+  const hourHeight = 52; // px per hour row
+  const topPx = h => (h - CONFIG.hoursStart) * hourHeight;
+  const heightPx = dur => dur * hourHeight;
 
   return (
-    <div className={`min-h-screen w-full ${bigScreen ? "p-4" : "p-6"} bg-gradient-to-b from-gray-50 to-white text-gray-900`}> 
-      <div className="max-w-7xl mx-auto grid gap-6">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <CalendarDays className="w-6 h-6" />
-            <h1 className="text-2xl font-semibold">Weekly 4‑Hour Assignment Board</h1>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button onClick={goPrev}><ChevronLeft className="w-4 h-4"/>Prev</Button>
-            <Button onClick={goToday}>Today</Button>
-            <Button onClick={goNext}>Next<ChevronRight className="w-4 h-4"/></Button>
-          </div>
+    <div className={`wrap ${tv? 'tv' : ''}`}>
+      <header className="card head">
+        <div className="title">
+          <h1>Weekly 4‑Hour Assignment Board</h1>
+          <div className="muted">Week <span className="mono">{weekKey}</span></div>
+          {loading && <div className="muted sm">Refreshing…</div>}
+          {error && <div className="error sm">{error}</div>}
         </div>
+        <div className="controls">
+          <button className="btn" onClick={()=>setBaseDate(new Date(baseDate.getTime()-7*86400000))}>Prev</button>
+          <button className="btn" onClick={()=>setBaseDate(startOfISOWeek(new Date()))}>Today</button>
+          <button className="btn" onClick={()=>setBaseDate(new Date(baseDate.getTime()+7*86400000))}>Next</button>
+          <button className="btn" onClick={()=>setTv(v=>!v)}>{tv? 'Normal' : 'TV Mode'}</button>
+        </div>
+      </header>
 
-        {/* Week summary */}
-        <Card>
-          <CardContent className="flex flex-wrap items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <span className="text-sm uppercase tracking-wide text-gray-500">Week</span>
-              <span className="text-lg font-semibold">{wkKey}</span>
-              <span className="text-gray-400">•</span>
-              <div className="flex gap-3 text-sm text-gray-600">
-                {days.map((d, i) => (
-                  <div key={i} className="flex flex-col items-center">
-                    <span className="font-medium">{d.toLocaleDateString(undefined, { weekday: "short" })}</span>
-                    <span className="text-xs">{formatDate(d)}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <Button onClick={exportCSV}><Download className="w-4 h-4"/>Export CSV</Button>
-              <Button onClick={toggleBigScreen} className={bigScreen ? "bg-gray-900 text-white" : ""}>
-                {bigScreen ? <><MonitorCog className="w-4 h-4"/>Big‑screen On</> : <><Monitor className="w-4 h-4"/>Big‑screen Off</>}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+      {!CONFIG.backendUrl && (
+        <div className="card note">No backend configured — data is stored only in <b>this browser</b>. Set <code>CONFIG.backendUrl</code> once you add the simple /api backend on Vercel.</div>
+      )}
 
-        {/* Controls */}
-        <Card>
-          <CardContent className="grid md:grid-cols-2 gap-4">
-            <div className="grid grid-cols-1 sm:grid-cols-5 gap-3 items-end">
-              <div className="sm:col-span-2">
-                <label className="block text-sm text-gray-600 mb-1">Person</label>
-                <select
-                  value={selectedPersonId}
-                  onChange={(e) => setSelectedPersonId(e.target.value)}
-                  className="w-full rounded-xl border border-gray-300 p-2 focus:outline-none focus:ring-2 focus:ring-blue-200"
-                >
-                  {people.map((p) => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm text-gray-600 mb-1">Day</label>
-                <select
-                  value={selectedDay}
-                  onChange={(e) => setSelectedDay(parseInt(e.target.value))}
-                  className="w-full rounded-xl border border-gray-300 p-2 focus:outline-none focus:ring-2 focus:ring-blue-200"
-                >
-                  {days.map((d, i) => (
-                    <option key={i} value={i}>{d.toLocaleDateString(undefined, { weekday: "long" })}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm text-gray-600 mb-1">Start time</label>
-                <select
-                  value={selectedStart}
-                  onChange={(e) => setSelectedStart(parseInt(e.target.value))}
-                  className="w-full rounded-xl border border-gray-300 p-2 focus:outline-none focus:ring-2 focus:ring-blue-200"
-                >
-                  {HOURS.map((h) => (
-                    <option key={h} value={h}>{HOUR_LABEL(h)}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <Button className="w-full bg-blue-600 text-white hover:bg-blue-700" onClick={assignFourHours}>
-                  Assign 4 hours
-                </Button>
-              </div>
-            </div>
+      <section className="card form">
+        <div className="grid formgrid">
+          <label>Person<input placeholder="e.g., Alex" value={name} onChange={e=>setName(e.target.value)} /></label>
+          <label>Day<select value={dayIndex} onChange={e=>setDayIndex(parseInt(e.target.value))}>{days.map((d,i)=>(<option key={i} value={i}>{d.toLocaleDateString(undefined,{weekday:'long',month:'short',day:'numeric'})}</option>))}</select></label>
+          <label>Start<select value={startHour} onChange={e=>setStartHour(parseInt(e.target.value))}>{HOURS.map(h=> (<option key={h} value={h}>{fmt(h)}</option>))}</select></label>
+          <div className="right"><button className="btn primary" onClick={submit}>Assign 4 hours</button></div>
+        </div>
+      </section>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div className="sm:col-span-2">
-                <label className="block text-sm text-gray-600 mb-1">Add person</label>
-                <div className="flex gap-2">
-                  <input
-                    className="flex-1 rounded-xl border border-gray-300 p-2 focus:outline-none focus:ring-2 focus:ring-blue-200"
-                    placeholder="Name (e.g., Jamie)"
-                    value={newPerson}
-                    onChange={(e) => setNewPerson(e.target.value)}
-                  />
-                  <Button onClick={handleAddPerson}><Plus className="w-4 h-4"/>Add</Button>
+      <section className="grid two">
+        {/* Calendar */}
+        <div className="card calendar">
+          <div className="calhead" />
+          {days.map((d,i)=> (<div key={i} className="calhead dayh"><div>{d.toLocaleDateString(undefined,{weekday:'short'})}<span className="muted sm"> {d.toLocaleDateString(undefined,{month:'short', day:'numeric'})}</span></div></div>))}
+
+          {/* time gutter */}
+          <div className="times">
+            {Array.from({length: CONFIG.hoursEnd - CONFIG.hoursStart}, (_,i)=>CONFIG.hoursStart+i).map(h => (
+              <div key={h} className="timecell">{fmt(h)}</div>
+            ))}
+          </div>
+
+          {/* day columns */}
+          {days.map((d,di)=> (
+            <div key={di} className="daycol" style={{height: (CONFIG.hoursEnd-CONFIG.hoursStart)*hourHeight}}>
+              {Array.from({length: CONFIG.hoursEnd - CONFIG.hoursStart}, (_,i)=>CONFIG.hoursStart+i).map(h => (<div key={h} className="row" />))}
+              {bookings.filter(b=>new Date(b.dayISO).toDateString()===d.toDateString()).map(b => (
+                <div key={b.id} className="block" style={{ top: topPx(b.startHour), height: heightPx(b.durationHours||4), background: hashColor(b.title), borderColor: borderColor(b.title) }} title={`${b.title} • ${fmt(b.startHour)}–${fmt(b.startHour+(b.durationHours||4))}`}>
+                  <div className="btitle">{b.title}</div>
+                  <div className="muted sm">{fmt(b.startHour)}–{fmt(b.startHour+(b.durationHours||4))}</div>
+                  <button className="link sm" onClick={()=>remove(b.id)}>cancel</button>
                 </div>
-              </div>
-              <div className="hidden sm:block" />
+              ))}
             </div>
-          </CardContent>
-        </Card>
-
-        {/* Grid Board */}
-        <Card>
-          <CardContent>
-            <div className={`grid ${bigScreen ? "text-xl" : "text-base"}`}>
-              <div className="grid grid-cols-8 gap-2 items-stretch">
-                <div className="font-semibold text-gray-500 uppercase tracking-wide text-sm">People</div>
-                {days.map((d, i) => (
-                  <div key={i} className="text-center font-semibold text-gray-600">
-                    {d.toLocaleDateString(undefined, { weekday: "short" })}
-                    <div className="text-xs text-gray-400">{formatDate(d)}</div>
-                  </div>
-                ))}
-              </div>
-              <div className="mt-2 space-y-2">
-                {people.map((p) => {
-                  const entry = thisWeek[p.id];
-                  return (
-                    <motion.div
-                      key={p.id}
-                      initial={{ opacity: 0, y: 6 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.2 }}
-                      className="grid grid-cols-8 gap-2 items-center"
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className={`w-8 h-8 rounded-full grid place-items-center border ${personColor(p.id)}`} title={p.name}>
-                          <span className="text-sm font-bold">{initials(p.name)}</span>
-                        </div>
-                        <div className="font-medium">{p.name}</div>
-                      </div>
-                      {days.map((_, dayIdx) => {
-                        const isThis = entry && entry.dayIndex === dayIdx;
-                        return (
-                          <div key={dayIdx} className="min-h-[3.25rem]">
-                            {isThis ? (
-                              <div className={`h-full w-full border rounded-xl p-2 flex items-center justify-between ${personColor(p.id)} shadow-inner`}
-                                   title={`${HOUR_LABEL(entry.startHour)}–${HOUR_LABEL(entry.startHour + 4)}`}>
-                                <div className="font-semibold">{HOUR_LABEL(entry.startHour)}–{HOUR_LABEL(entry.startHour + 4)}</div>
-                                <button
-                                  className="text-xs underline"
-                                  onClick={() => clearAssignment(p.id)}
-                                >
-                                  clear
-                                </button>
-                              </div>
-                            ) : (
-                              <div className="h-full w-full border border-dashed rounded-xl text-gray-300 grid place-items-center">
-                                <span className="text-xs">—</span>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </motion.div>
-                  );
-                })}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Legend / Notes */}
-        <div className="text-sm text-gray-500">
-          <p>Each person can be assigned exactly one 4‑hour block per week. Change the week to re‑assign. Use Export CSV to share or print. Toggle Big‑screen for larger text when displaying on a TV.</p>
+          ))}
         </div>
-      </div>
+
+        {/* People legend / list */}
+        <div className="card legend">
+          <div className="legendhead">People this week</div>
+          <div className="legendlist">
+            {Array.from(new Set(bookings.map(b=>b.title))).sort().map(n => (
+              <div key={n} className="chip" style={{ background: hashColor(n), borderColor: borderColor(n) }}>{n}</div>
+            ))}
+          </div>
+
+          <div className="muted sm" style={{marginTop:8}}>
+            {CONFIG.onePerWeek ? 'Each person can book one 4‑hour slot per week.' : 'Multiple bookings per week allowed.'}
+          </div>
+
+          <div className="muted sm" style={{marginTop:16}}>
+            Built‑in checks: {runTests().filter(t=>t.ok).length}/{runTests().length} passed
+          </div>
+        </div>
+      </section>
     </div>
   );
 }
+
+// ==========================
+// Styles — clean, TV‑friendly, no Tailwind required
+// ==========================
+const Styles = () => (
+  <style>{`
+    :root{--bg:#f7f7fb;--card:#fff;--muted:#6b7280;--border:#e5e7eb;--text:#0f172a;--accent:#2563eb}
+    body{background:var(--bg);color:var(--text);font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial, "Apple Color Emoji","Segoe UI Emoji"}
+    .wrap{max-width:1200px;margin:0 auto;padding:24px}
+    .wrap.tv{font-size:1.15rem}
+    .card{background:var(--card);border:1px solid var(--border);border-radius:16px;box-shadow:0 1px 3px rgba(0,0,0,.05);padding:16px}
+    .head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}
+    h1{margin:0;font-size:22px}
+    .mono{font-family:ui-monospace, SFMono-Regular, Menlo, monospace}
+    .muted{color:var(--muted)}
+    .sm{font-size:12px}
+    .error{color:#b91c1c}
+    .controls{display:flex;gap:8px}
+    .btn{border:1px solid var(--border);background:#fff;border-radius:12px;padding:8px 12px;cursor:pointer}
+    .btn.primary{background:var(--accent);color:#fff;border-color:transparent}
+    .btn:active{transform:translateY(1px)}
+    .note{background:#fffbeb;border-color:#fde68a;color:#92400e}
+
+    .grid.two{display:grid;grid-template-columns: 2fr 1fr; gap:12px;}
+    .formgrid{display:grid;grid-template-columns:2fr 2fr 1fr auto;gap:12px;align-items:end}
+    label{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--muted)}
+    input,select{border:1px solid var(--border);border-radius:12px;padding:8px 10px}
+    .right{display:flex;justify-content:flex-end;align-items:end}
+
+    /* Calendar */
+    .calendar{display:grid;grid-template-columns: 72px repeat(7,1fr); gap:0}
+    .calhead{display:contents}
+    .dayh>div{padding:10px 8px;font-weight:700;text-align:center}
+    .times{display:grid;grid-auto-rows:52px;border-right:1px solid var(--border)}
+    .timecell{font-size:12px;color:var(--muted);padding:4px 8px}
+    .daycol{position:relative;border-left:1px solid var(--border)}
+    .row{height:52px;border-top:1px dashed #eee}
+    .block{position:absolute;left:6px;right:6px;border:1px solid;border-radius:12px;padding:8px;overflow:hidden}
+    .btitle{font-weight:700}
+
+    /* Legend */
+    .legendhead{font-weight:700;margin-bottom:8px}
+    .legendlist{display:flex;flex-wrap:wrap;gap:8px}
+    .chip{border:1px solid;border-radius:999px;padding:6px 10px}
+
+    @media (max-width: 980px){
+      .grid.two{grid-template-columns:1fr}
+      .formgrid{grid-template-columns:1fr 1fr;}
+      .calendar{grid-template-columns: 56px repeat(7, 1fr)}
+    }
+  `}</style>
+);
