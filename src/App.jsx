@@ -1,7 +1,6 @@
-// App.jsx — Weekly 4‑Hour Assignment Board (clean design, no auth)
-// Purpose: A big‑screen friendly weekly board where each person books EXACTLY one 4‑hour slot per week.
-// Storage: localStorage by default (shared backend optional via CONFIG.backendUrl)
-// Notes: Designed to be embedded in SharePoint or opened directly (Vercel).
+// App.jsx — Weekly 4‑Hour Assignment Board (people × days grid, no auth)
+// Clean light UI (no Tailwind). Multiple bookings allowed per person. CSV export. Big‑screen mode.
+// Storage: localStorage by default; optional Vercel /api backend via CONFIG.backendUrl.
 
 import React, { useEffect, useMemo, useState } from "react";
 
@@ -9,11 +8,9 @@ import React, { useEffect, useMemo, useState } from "react";
 // CONFIG
 // ==========================
 const CONFIG = {
-  backendUrl: null,     // set to '/api' after adding Vercel serverless functions to share across devices
+  backendUrl: null,     // set to '/api' after adding serverless functions; otherwise it uses localStorage only
   refreshMs: 60000,     // auto refresh interval
-  onePerWeek: true,     // enforce exactly one 4h booking per person per week
-  hoursStart: 7,        // start of visible day
-  hoursEnd: 20,         // end (exclusive)
+  hours: Array.from({ length: 13 }, (_, i) => 6 + i), // 06:00–18:00 choices for start time
 };
 
 // ==========================
@@ -34,71 +31,44 @@ function weekKeyFromDate(d) {
   const weekNo = 1 + Math.round(((target - week1) / 86400000 - 3 + ((week1.getUTCDay() + 6) % 7)) / 7);
   return `${target.getUTCFullYear()}-W${String(weekNo).padStart(2, "0")}`;
 }
-const HOURS = Array.from({ length: (CONFIG.hoursEnd - CONFIG.hoursStart) + 1 }, (_, i) => CONFIG.hoursStart + i);
 const fmt = (h) => `${String(h).padStart(2, "0")}:00`;
-const label = (d) => d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
 
 // ==========================
-// Color helpers (stable per name)
+// Colors per person (stable)
 // ==========================
-function hashColor(name) {
+function colorFor(name) {
   let h = 0; for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
   const hues = [210, 15, 140, 270, 340, 95, 30, 185];
   const hue = hues[h % hues.length];
-  return `hsl(${hue} 85% 90%)`; // pastel bg
-}
-function borderColor(name) {
-  let h = 0; for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
-  const hues = [210, 15, 140, 270, 340, 95, 30, 185];
-  const hue = hues[h % hues.length];
-  return `hsl(${hue} 70% 65%)`;
+  return {
+    bg: `hsl(${hue} 85% 92%)`,
+    border: `hsl(${hue} 70% 68%)`,
+  };
 }
 
 // ==========================
-// Storage layer (localStorage by default, optional REST)
+// Storage layer (localStorage default, optional REST)
 // ==========================
-const LS_KEY = "weekly_four_hour_board_v1";
-function loadAllLS() { try { return JSON.parse(localStorage.getItem(LS_KEY) || "{}"); } catch { return {}; } }
-function saveAllLS(obj) { try { localStorage.setItem(LS_KEY, JSON.stringify(obj)); } catch {} }
-async function apiGetWeekLS(weekKey) { const all = loadAllLS(); return Object.values(all).filter(b => b.weekKey === weekKey); }
-async function apiCreateLS(body) {
-  const all = loadAllLS();
-  const id = `b_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  all[id] = { id, ...body };
-  saveAllLS(all);
-  return all[id];
-}
-async function apiDeleteLS(id) { const all = loadAllLS(); delete all[id]; saveAllLS(all); }
+const LS_BOOKINGS = "w4h_bookings_v1";
+const LS_PEOPLE = "w4h_people_v1";
+function loadObj(key){ try{return JSON.parse(localStorage.getItem(key)||"{}");}catch{return{}} }
+function saveObj(key,val){ try{ localStorage.setItem(key, JSON.stringify(val)); }catch{} }
+function loadArr(key){ try{return JSON.parse(localStorage.getItem(key)||"[]");}catch{return[]} }
+function saveArr(key,val){ try{ localStorage.setItem(key, JSON.stringify(val)); }catch{} }
 
-async function apiGetWeekHTTP(weekKey) {
-  const r = await fetch(`${CONFIG.backendUrl}/bookings?weekKey=${encodeURIComponent(weekKey)}`);
-  if (!r.ok) throw new Error(await r.text());
-  return r.json();
-}
-async function apiCreateHTTP(body) {
-  const r = await fetch(`${CONFIG.backendUrl}/bookings`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  if (!r.ok) throw new Error(await r.text());
-  return r.json();
-}
-async function apiDeleteHTTP(id) {
-  const r = await fetch(`${CONFIG.backendUrl}/bookings/${encodeURIComponent(id)}`, { method: 'DELETE' });
-  if (!r.ok) throw new Error(await r.text());
-}
+// Local bookings
+async function apiGetWeekLS(weekKey){ const all = loadObj(LS_BOOKINGS); return Object.values(all).filter(b=>b.weekKey===weekKey); }
+async function apiCreateLS(body){ const all = loadObj(LS_BOOKINGS); const id = `b_${Date.now()}_${Math.random().toString(36).slice(2,6)}`; all[id] = {id,...body}; saveObj(LS_BOOKINGS, all); return all[id]; }
+async function apiDeleteLS(id){ const all = loadObj(LS_BOOKINGS); delete all[id]; saveObj(LS_BOOKINGS, all); }
+
+// Optional HTTP API (same shapes)
+async function apiGetWeekHTTP(weekKey){ const r = await fetch(`${CONFIG.backendUrl}/bookings?weekKey=${encodeURIComponent(weekKey)}`); if(!r.ok) throw new Error(await r.text()); return r.json(); }
+async function apiCreateHTTP(body){ const r = await fetch(`${CONFIG.backendUrl}/bookings`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)}); if(!r.ok) throw new Error(await r.text()); return r.json(); }
+async function apiDeleteHTTP(id){ const r = await fetch(`${CONFIG.backendUrl}/bookings/${encodeURIComponent(id)}`, {method:'DELETE'}); if(!r.ok) throw new Error(await r.text()); }
 
 const API = CONFIG.backendUrl
   ? { getWeek: apiGetWeekHTTP, create: apiCreateHTTP, del: apiDeleteHTTP }
-  : { getWeek: apiGetWeekLS, create: apiCreateLS, del: apiDeleteLS };
-
-// ==========================
-// Tests (light sanity)
-// ==========================
-function runTests() {
-  const out = []; const t = (n, c) => out.push({ n, ok: !!c });
-  const d = new Date(Date.UTC(2025,0,1));
-  t('weekKey shape', /^\d{4}-W\d{2}$/.test(weekKeyFromDate(d)));
-  const b = new Date(Date.UTC(2025,10,10)); t('addDays', addDays(b,2).getUTCDate()===12);
-  return out;
-}
+  : { getWeek: apiGetWeekLS,   create: apiCreateLS,   del: apiDeleteLS };
 
 // ==========================
 // UI
@@ -117,50 +87,55 @@ function Board(){
   const weekKey = useMemo(() => weekKeyFromDate(baseDate), [baseDate]);
   const days = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(baseDate, i)), [baseDate]);
 
+  const [people, setPeople] = useState(() => loadArr(LS_PEOPLE).length? loadArr(LS_PEOPLE) : ["Alex","Sam","Taylor"]);
   const [bookings, setBookings] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [tv, setTv] = useState(false);
 
   // form
-  const [name, setName] = useState('');
+  const [person, setPerson] = useState(() => (loadArr(LS_PEOPLE)[0]||"Alex"));
   const [dayIndex, setDayIndex] = useState(0);
   const [startHour, setStartHour] = useState(8);
+  const [newPerson, setNewPerson] = useState("");
 
-  async function load(){
-    setLoading(true); setError('');
-    try{ const data = await API.getWeek(weekKey); setBookings(data);} catch(e){ setError(String(e.message||e)); } finally{ setLoading(false);} }
-
+  async function load(){ setLoading(true); setError(''); try{ setBookings(await API.getWeek(weekKey)); } catch(e){ setError(String(e.message||e)); } finally{ setLoading(false);} }
   useEffect(()=>{ load(); }, [weekKey]);
   useEffect(()=>{ const id=setInterval(load, CONFIG.refreshMs); return ()=>clearInterval(id); }, []);
 
+  function addPerson(){ const p = newPerson.trim(); if(!p) return; const list = Array.from(new Set([...people, p])); setPeople(list); saveArr(LS_PEOPLE, list); if(!person) setPerson(p); setNewPerson(""); }
+
   async function submit(){
-    const nm = name.trim(); if(!nm){ setError('Please enter your name'); return; }
-    if(CONFIG.onePerWeek){
-      const has = bookings.some(b=> b.title===nm);
-      if(has){ setError('You already have a 4‑hour assignment this week.'); return; }
-    }
-    const d = days[dayIndex];
-    const iso = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())).toISOString();
-    try{
-      await API.create({ id: undefined, title: nm, dayISO: iso, startHour, durationHours: 4, weekKey });
-      setName(''); await load();
-    }catch(e){ setError(String(e.message||e)); }
+    const nm = person?.trim(); if(!nm){ setError('Pick a person'); return; }
+    const d = days[dayIndex]; const iso = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())).toISOString();
+    try{ await API.create({ title: nm, dayISO: iso, startHour, durationHours:4, weekKey }); await load(); }
+    catch(e){ setError(String(e.message||e)); }
   }
 
   async function remove(id){ try{ await API.del(id); await load(); } catch(e){ setError(String(e.message||e)); } }
 
-  // calendar placement
-  const hourHeight = 52; // px per hour row
-  const topPx = h => (h - CONFIG.hoursStart) * hourHeight;
-  const heightPx = dur => dur * hourHeight;
+  function exportCSV(){
+    const rows = [[`Week`, weekKey], [], ["Person","Day","Date","Start","End"]];
+    bookings.sort((a,b)=>a.title.localeCompare(b.title)).forEach(b=>{
+      const d = new Date(b.dayISO);
+      rows.push([b.title, d.toLocaleDateString(undefined,{weekday:'short'}), d.toLocaleDateString(), fmt(b.startHour), fmt(b.startHour+(b.durationHours||4))]);
+    });
+    const csv = rows.map(r=>r.join(",")).join("\n");
+    const blob = new Blob([csv], {type:'text/csv'});
+    const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href=url; a.download=`assignments_${weekKey}.csv`; a.click(); URL.revokeObjectURL(url);
+  }
 
   return (
     <div className={`wrap ${tv? 'tv' : ''}`}>
       <header className="card head">
-        <div className="title">
+        <div>
           <h1>Weekly 4‑Hour Assignment Board</h1>
-          <div className="muted">Week <span className="mono">{weekKey}</span></div>
+          <div className="muted">WEEK <span className="mono">{weekKey}</span>
+            <span className="dot">•</span>
+            {days.map((d,i)=> (
+              <span key={i} className="weekday">{d.toLocaleDateString(undefined,{weekday:'short'})} <span className="muted sm">{d.toLocaleDateString(undefined,{month:'short',day:'numeric'})}</span>{i<6?' ':' '}</span>
+            ))}
+          </div>
           {loading && <div className="muted sm">Refreshing…</div>}
           {error && <div className="error sm">{error}</div>}
         </div>
@@ -168,88 +143,91 @@ function Board(){
           <button className="btn" onClick={()=>setBaseDate(new Date(baseDate.getTime()-7*86400000))}>Prev</button>
           <button className="btn" onClick={()=>setBaseDate(startOfISOWeek(new Date()))}>Today</button>
           <button className="btn" onClick={()=>setBaseDate(new Date(baseDate.getTime()+7*86400000))}>Next</button>
-          <button className="btn" onClick={()=>setTv(v=>!v)}>{tv? 'Normal' : 'TV Mode'}</button>
+          <button className="btn" onClick={exportCSV}>Export CSV</button>
+          <button className="btn" onClick={()=>setTv(v=>!v)}>{tv? 'Big‑screen On' : 'Big‑screen Off'}</button>
         </div>
       </header>
 
       {!CONFIG.backendUrl && (
-        <div className="card note">No backend configured — data is stored only in <b>this browser</b>. Set <code>CONFIG.backendUrl</code> once you add the simple /api backend on Vercel.</div>
+        <div className="card note">No backend configured — data is stored only in <b>this browser</b>. Set <code>CONFIG.backendUrl</code> after adding a simple <code>/api</code> on Vercel if you want everyone to share bookings.</div>
       )}
 
       <section className="card form">
-        <div className="grid formgrid">
-          <label>Person<input placeholder="e.g., Alex" value={name} onChange={e=>setName(e.target.value)} /></label>
-          <label>Day<select value={dayIndex} onChange={e=>setDayIndex(parseInt(e.target.value))}>{days.map((d,i)=>(<option key={i} value={i}>{d.toLocaleDateString(undefined,{weekday:'long',month:'short',day:'numeric'})}</option>))}</select></label>
-          <label>Start<select value={startHour} onChange={e=>setStartHour(parseInt(e.target.value))}>{HOURS.map(h=> (<option key={h} value={h}>{fmt(h)}</option>))}</select></label>
+        <div className="formgrid">
+          <label>Person<select value={person} onChange={e=>setPerson(e.target.value)}>{people.map(p=> <option key={p} value={p}>{p}</option>)}</select></label>
+          <label>Day<select value={dayIndex} onChange={e=>setDayIndex(parseInt(e.target.value))}>{days.map((d,i)=>(<option key={i} value={i}>{d.toLocaleDateString(undefined,{weekday:'long'})}</option>))}</select></label>
+          <label>Start time<select value={startHour} onChange={e=>setStartHour(parseInt(e.target.value))}>{CONFIG.hours.map(h=> <option key={h} value={h}>{fmt(h)}</option>)}</select></label>
           <div className="right"><button className="btn primary" onClick={submit}>Assign 4 hours</button></div>
+          <div className="grow"></div>
+          <label className="grow">Add person<input placeholder="Name (e.g., Jamie)" value={newPerson} onChange={e=>setNewPerson(e.target.value)} /></label>
+          <div><button className="btn" onClick={addPerson}>+ Add</button></div>
         </div>
       </section>
 
-      <section className="grid two">
-        {/* Calendar */}
-        <div className="card calendar">
-          <div className="calhead" />
-          {days.map((d,i)=> (<div key={i} className="calhead dayh"><div>{d.toLocaleDateString(undefined,{weekday:'short'})}<span className="muted sm"> {d.toLocaleDateString(undefined,{month:'short', day:'numeric'})}</span></div></div>))}
+      {/* PEOPLE × DAYS grid */}
+      <section className="card gridboard">
+        <div className="gridhead" />
+        {days.map((d,i)=> <div key={i} className="gridhead dayh"><div>{d.toLocaleDateString(undefined,{weekday:'short'})}<span className="muted sm"> {d.toLocaleDateString(undefined,{month:'short',day:'numeric'})}</span></div></div>)}
 
-          {/* time gutter */}
-          <div className="times">
-            {Array.from({length: CONFIG.hoursEnd - CONFIG.hoursStart}, (_,i)=>CONFIG.hoursStart+i).map(h => (
-              <div key={h} className="timecell">{fmt(h)}</div>
-            ))}
-          </div>
-
-          {/* day columns */}
-          {days.map((d,di)=> (
-            <div key={di} className="daycol" style={{height: (CONFIG.hoursEnd-CONFIG.hoursStart)*hourHeight}}>
-              {Array.from({length: CONFIG.hoursEnd - CONFIG.hoursStart}, (_,i)=>CONFIG.hoursStart+i).map(h => (<div key={h} className="row" />))}
-              {bookings.filter(b=>new Date(b.dayISO).toDateString()===d.toDateString()).map(b => (
-                <div key={b.id} className="block" style={{ top: topPx(b.startHour), height: heightPx(b.durationHours||4), background: hashColor(b.title), borderColor: borderColor(b.title) }} title={`${b.title} • ${fmt(b.startHour)}–${fmt(b.startHour+(b.durationHours||4))}`}>
-                  <div className="btitle">{b.title}</div>
-                  <div className="muted sm">{fmt(b.startHour)}–{fmt(b.startHour+(b.durationHours||4))}</div>
-                  <button className="link sm" onClick={()=>remove(b.id)}>cancel</button>
-                </div>
-              ))}
+        <div className="peoplecol">
+          <div className="peoplelabel">PEOPLE</div>
+          {people.map(p=> (
+            <div key={p} className="personrow">
+              <div className="bullet" style={{background: colorFor(p).bg, borderColor: colorFor(p).border}}>{p[0]?.toUpperCase()}</div>
+              <div className="pname">{p}</div>
             </div>
           ))}
         </div>
 
-        {/* People legend / list */}
-        <div className="card legend">
-          <div className="legendhead">People this week</div>
-          <div className="legendlist">
-            {Array.from(new Set(bookings.map(b=>b.title))).sort().map(n => (
-              <div key={n} className="chip" style={{ background: hashColor(n), borderColor: borderColor(n) }}>{n}</div>
-            ))}
+        {days.map((d,di)=> (
+          <div key={di} className="daycells">
+            {people.map(p=>{
+              const cell = bookings.filter(b=> b.title===p && new Date(b.dayISO).toDateString()===d.toDateString());
+              return (
+                <div key={p} className="cell">
+                  {cell.length===0 ? (
+                    <div className="empty">—</div>
+                  ) : (
+                    <div className="chips">
+                      {cell.sort((a,b)=>a.startHour-b.startHour).map(b=>{
+                        const {bg,border} = colorFor(p);
+                        return (
+                          <div key={b.id} className="chip" style={{background:bg, borderColor:border}}>
+                            {fmt(b.startHour)}–{fmt(b.startHour + (b.durationHours||4))}
+                            <button className="x" onClick={()=>remove(b.id)} aria-label="remove">×</button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
-
-          <div className="muted sm" style={{marginTop:8}}>
-            {CONFIG.onePerWeek ? 'Each person can book one 4‑hour slot per week.' : 'Multiple bookings per week allowed.'}
-          </div>
-
-          <div className="muted sm" style={{marginTop:16}}>
-            Built‑in checks: {runTests().filter(t=>t.ok).length}/{runTests().length} passed
-          </div>
-        </div>
+        ))}
       </section>
+
+      <footer className="muted sm center">Change weeks with Prev/Next. Export CSV to share. Toggle Big‑screen for TVs.</footer>
     </div>
   );
 }
 
 // ==========================
-// Styles — clean, TV‑friendly, no Tailwind required
+// Styles — light card UI (no Tailwind)
 // ==========================
 const Styles = () => (
   <style>{`
     :root{--bg:#f7f7fb;--card:#fff;--muted:#6b7280;--border:#e5e7eb;--text:#0f172a;--accent:#2563eb}
-    body{background:var(--bg);color:var(--text);font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial, "Apple Color Emoji","Segoe UI Emoji"}
+    body{background:var(--bg);color:var(--text);font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial}
     .wrap{max-width:1200px;margin:0 auto;padding:24px}
     .wrap.tv{font-size:1.15rem}
     .card{background:var(--card);border:1px solid var(--border);border-radius:16px;box-shadow:0 1px 3px rgba(0,0,0,.05);padding:16px}
     .head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}
-    h1{margin:0;font-size:22px}
+    h1{margin:0;font-size:28px}
     .mono{font-family:ui-monospace, SFMono-Regular, Menlo, monospace}
     .muted{color:var(--muted)}
     .sm{font-size:12px}
+    .center{text-align:center;margin-top:8px}
     .error{color:#b91c1c}
     .controls{display:flex;gap:8px}
     .btn{border:1px solid var(--border);background:#fff;border-radius:12px;padding:8px 12px;cursor:pointer}
@@ -257,32 +235,34 @@ const Styles = () => (
     .btn:active{transform:translateY(1px)}
     .note{background:#fffbeb;border-color:#fde68a;color:#92400e}
 
-    .grid.two{display:grid;grid-template-columns: 2fr 1fr; gap:12px;}
-    .formgrid{display:grid;grid-template-columns:2fr 2fr 1fr auto;gap:12px;align-items:end}
+    .form .formgrid{display:grid;grid-template-columns:1.2fr 1fr 1fr auto 1fr auto;gap:12px;align-items:end}
     label{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--muted)}
     input,select{border:1px solid var(--border);border-radius:12px;padding:8px 10px}
-    .right{display:flex;justify-content:flex-end;align-items:end}
+    .right{display:flex;justify-content:flex-end}
 
-    /* Calendar */
-    .calendar{display:grid;grid-template-columns: 72px repeat(7,1fr); gap:0}
-    .calhead{display:contents}
-    .dayh>div{padding:10px 8px;font-weight:700;text-align:center}
-    .times{display:grid;grid-auto-rows:52px;border-right:1px solid var(--border)}
-    .timecell{font-size:12px;color:var(--muted);padding:4px 8px}
-    .daycol{position:relative;border-left:1px solid var(--border)}
-    .row{height:52px;border-top:1px dashed #eee}
-    .block{position:absolute;left:6px;right:6px;border:1px solid;border-radius:12px;padding:8px;overflow:hidden}
-    .btitle{font-weight:700}
+    .gridboard{display:grid;grid-template-columns: 160px repeat(7, 1fr);gap:0}
+    .gridhead{display:contents}
+    .dayh>div{padding:12px 10px;font-weight:700;text-align:center}
 
-    /* Legend */
-    .legendhead{font-weight:700;margin-bottom:8px}
-    .legendlist{display:flex;flex-wrap:wrap;gap:8px}
-    .chip{border:1px solid;border-radius:999px;padding:6px 10px}
+    .peoplecol{border-right:1px solid var(--border)}
+    .peoplelabel{font-weight:700;margin:0 0 8px 8px;color:var(--muted)}
+    .personrow{display:flex;align-items:center;gap:10px;padding:10px 8px;border-top:1px solid var(--border)}
+    .bullet{width:28px;height:28px;border-radius:999px;border:1px solid;display:grid;place-items:center;font-weight:700;color:#111}
+    .pname{font-weight:600}
+
+    .daycells{display:grid;grid-template-rows: 40px repeat(var(--people-rows, 0), 56px)}
+    /* rows per day are simulated by borders in .cell below */
+
+    .daycells .cell{border-left:1px solid var(--border);border-top:1px solid var(--border);padding:8px;min-height:56px}
+    .empty{height:28px;border:1px dashed #d1d5db;border-radius:999px;display:grid;place-items:center;color:#c0c8d2}
+    .chips{display:flex;flex-wrap:wrap;gap:6px}
+    .chip{border:1px solid;border-radius:999px;padding:6px 10px;position:relative}
+    .chip .x{background:transparent;border:0;cursor:pointer;margin-left:8px;color:#111}
 
     @media (max-width: 980px){
-      .grid.two{grid-template-columns:1fr}
-      .formgrid{grid-template-columns:1fr 1fr;}
-      .calendar{grid-template-columns: 56px repeat(7, 1fr)}
+      .wrap{padding:12px}
+      .form .formgrid{grid-template-columns:1fr 1fr 1fr auto;}
+      .gridboard{grid-template-columns:120px repeat(7,1fr)}
     }
   `}</style>
 );
