@@ -8,7 +8,7 @@ import React, { useEffect, useMemo, useState } from "react";
 // CONFIG
 // ==========================
 const CONFIG = {
-  backendUrl: null,     // set to '/api' after adding serverless functions; otherwise it uses localStorage only
+  backendUrl: '/api',     // set to '/api' after adding serverless functions; otherwise it uses localStorage only
   refreshMs: 60000,     // auto refresh interval
   hours: Array.from({ length: 13 }, (_, i) => 6 + i), // 06:00–18:00 choices for start time
 };
@@ -87,8 +87,7 @@ function Board(){
   const weekKey = useMemo(() => weekKeyFromDate(baseDate), [baseDate]);
   const days = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(baseDate, i)), [baseDate]);
 
-  const [people, setPeople] = useState(() => loadArr(LS_PEOPLE).length? loadArr(LS_PEOPLE) : ["Alex","Sam","Taylor"]);
-  const [bookings, setBookings] = useState([]);
+  const [people, setPeople] = useState(() => loadArr(LS_PEOPLE));  const [bookings, setBookings] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [tv, setTv] = useState(false);
